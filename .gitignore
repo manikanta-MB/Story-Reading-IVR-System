@@ -1,0 +1,6 @@
+.env
+private.key
+node_modules
+AudioFiles
+temp.js
+*.mp3
