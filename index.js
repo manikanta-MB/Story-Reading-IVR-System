@@ -77,7 +77,7 @@ function getInputAction(eventEndpoint,speechInput = false,maxDigits=1){
   }
 }
 
-async function getStoryOptions(category=undefined){
+async function getStoryOptions(to,category=undefined){
   let result = ""
   if(category){
     result = await client.query(`select * from story_book where category_id = 
@@ -88,30 +88,38 @@ async function getStoryOptions(category=undefined){
   else{
     result = await client.query(`select * from story_book`);
   }
-  storyOptionsText = ""
-  storyOptions = {}
+  userInfo[to]["storyOptionsText"] = ""
+  userInfo[to]["storyOptions"] = {}
   for(let i=0; i < result.rows.length; i++){
     let book = result.rows[i];
-    storyOptionsText += "To select "+book.name+", press "+(i+1)+". ";
-    storyOptions[(i+1).toString()] = book.name;
+    userInfo[to]["storyOptionsText"] += "To select "+book.name+", press "+(i+1)+". ";
+    userInfo[to]["storyOptions"][(i+1).toString()] = book.name;
   }
   return "successfully fetched the stories";
 }
 
-async function getCategoryOptions(){
+async function getCategoryOptions(to){
   const result = await client.query(`select * from story_category`);
-  categoryOptionsText = ""
-  categoryOptions = {}
+  userInfo[to]["categoryOptionsText"] = ""
+  userInfo[to]["categoryOptions"] = {}
   for(let i=0; i < result.rows.length; i++){
     let category = result.rows[i];
-    categoryOptionsText += "To select " + category.name + ", press "+(i+1)+". ";
-    categoryOptions[(i+1).toString()] = category.name;
+    userInfo[to]["categoryOptionsText"] += "To select " + category.name + ", press "+(i+1)+". ";
+    userInfo[to]["categoryOptions"][(i+1).toString()] = category.name;
   }
   return "successfully fetched the categories";
 }
 
-function storyCompleted(){
-  vonage.calls.update(uuid, 
+function storyCompleted(to){
+  userInfo[to]["isAudioActive"] = false
+  userInfo[to]["currentStory"] = undefined
+  fs.unlink(`${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`,function(err){
+    if(err){
+      console.log(err);
+    }
+    console.log("File Deleted.");
+  });
+  vonage.calls.update(userInfo[to]["uuid"], 
     {
       "action": "transfer",
       "destination": {
@@ -119,7 +127,9 @@ function storyCompleted(){
         "ncco": [
           {
             "action": "talk",
-            "text": "Your Story was completed. Thank you for listening."
+            "text": "Your Story was completed. Thank you for listening.",
+            "language": "en-IN",
+            "level": 1
           }
         ]
       }
@@ -128,26 +138,26 @@ function storyCompleted(){
   });
 }
 
-function startStream(){
-  isAudioActive = true;
-  if(isNewStoryRequest){
+function startStream(to){
+  userInfo[to]["isAudioActive"] = true;
+  if(userInfo[to]["isNewStoryRequest"]){
     let url = "https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/baseinput/input%202.mp3?raw=true"
-    currentStoryAudioFileName = uuidv4() + ".mp3"
+    userInfo[to]["currentStoryAudioFileName"] = uuidv4() + ".mp3"
     https.get(url,(res) => {
-    	const path = `${__dirname}/AudioFiles/${currentStoryAudioFileName}`;
+    	const path = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
     	const filePath = fs.createWriteStream(path);
     	res.pipe(filePath);
     	filePath.on('finish',() => {
     		filePath.close();
-    		console.log('Download Completed');
+    		console.log('Download Completed.');
 
-        vonage.calls.stream.start(uuid, { stream_url: [remoteUrl + `audio/${currentStoryAudioFileName}`], level: 1 }, (err, res) => {
+        vonage.calls.stream.start(userInfo[to]["uuid"], { stream_url: [remoteUrl + `audio/${userInfo[to]["currentStoryAudioFileName"]}`], level: 1 }, (err, res) => {
           if(err) { console.error(err); }
           else {
               console.log(res);
-              storyPlayingStartingTime = Date.now();
+              userInfo[to]["storyPlayingStartingTime"] = Date.now();
               getAudioDurationInSeconds(path).then((duration) => {
-                  storyTimeOutId = setTimeout(storyCompleted,(duration+1).toFixed(0)*1000);
+                  userInfo[to]["storyTimeOutId"] = setTimeout(() => { storyCompleted(to) },(duration+1).toFixed(0)*1000);
               });
           }
         });
@@ -156,45 +166,102 @@ function startStream(){
     });
   }
   else{
-    vonage.calls.stream.start(uuid, { stream_url: [remoteUrl + `audio/${currentStoryAudioFileName}`], level: 1 }, (err, res) => {
+    vonage.calls.stream.start(userInfo[to]["uuid"], { stream_url: [remoteUrl + `audio/${userInfo[to]["currentStoryAudioFileName"]}`], level: 1 }, (err, res) => {
       if(err) { console.error(err); }
       else {
           console.log(res);
-          storyPlayingStartingTime = Date.now();
-          const path = `${__dirname}/AudioFiles/${currentStoryAudioFileName}`;
+          userInfo[to]["storyPlayingStartingTime"] = Date.now();
+          const path = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
           getAudioDurationInSeconds(path).then((duration) => {
-            storyTimeOutId = setTimeout(storyCompleted,(duration+1).toFixed(0)*1000);
+            userInfo[to]["storyTimeOutId"] = setTimeout( () => { storyCompleted(to) },(duration+1).toFixed(0)*1000);
           });
       }
     });
   }
 }
 
-function stopStream(){
-  clearTimeout(storyTimeOutId);
-  isAudioActive = false;
-  vonage.calls.stream.stop(uuid, (err, res) => {
+function stopStream(to){
+  clearTimeout(userInfo[to]["storyTimeOutId"]);
+  userInfo[to]["isAudioActive"] = false;
+  vonage.calls.stream.stop(userInfo[to]["uuid"], (err, res) => {
     if(err) { console.error(err); }
     else {
         console.log(res);
-        let timeDifference = ((Date.now() - storyPlayingStartingTime - 1000)/1000).toFixed(0);
-        const currentPath = `${__dirname}/AudioFiles/${currentStoryAudioFileName}`;
-        currentStoryAudioFileName = uuidv4() + ".mp3"
-        const newPath = `${__dirname}/AudioFiles/${currentStoryAudioFileName}`;
-        console.log("timeDifference ", timeDifference);
-        MP3Cutter.cut({
-          src: currentPath,
-          target: newPath,
-          start: timeDifference
+        let timeDifference = ((Date.now() - userInfo[to]["storyPlayingStartingTime"] - 1000)/1000).toFixed(0);
+        const currentPath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
+
+        getAudioDurationInSeconds(currentPath).then((duration) => {
+          if(timeDifference >= duration){
+            storyCompleted(to);
+          }
+          else{
+            userInfo[to]["currentStoryAudioFileName"] = uuidv4() + ".mp3"
+            const newPath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
+            console.log("timeDifference ", timeDifference);
+            MP3Cutter.cut({
+              src: currentPath,
+              target: newPath,
+              start: timeDifference
+            });
+            fs.unlink(currentPath,function(err){
+              if(err){
+                console.log(err);
+              }
+              console.log("File deleted.");
+            });
+            console.log("cut completed.");
+          }
         });
-        console.log("cut completed.");
     }
   });
 }
 
+function callCompleted(to){
+  clearTimeout(userInfo[to]["storyTimeOutId"]);
+  userInfo[to]["isAudioActive"] = false;
+  let timeDifference = ((Date.now() - userInfo[to]["storyPlayingStartingTime"] - 1000)/1000).toFixed(0);
+  const currentPath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
+
+  getAudioDurationInSeconds(currentPath).then((duration) => {
+    if(timeDifference >= duration){
+      storyCompleted(to);
+    }
+    else{
+      userInfo[to]["currentStoryAudioFileName"] = uuidv4() + ".mp3"
+      const newPath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
+      console.log("timeDifference ", timeDifference);
+      MP3Cutter.cut({
+        src: currentPath,
+        target: newPath,
+        start: timeDifference
+      });
+      fs.unlink(currentPath,function(err){
+        if(err){
+          console.log(err);
+        }
+        console.log("File deleted.");
+      });
+      console.log("cut completed.");
+    }
+  });
+}
+
+function isThereAnyRunningStory(to){
+  if(userInfo[to]["currentStory"]){
+    const filePath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
+    fs.unlink(filePath,function(err){
+      if(err){
+        console.log(err);
+      }
+      console.log("Previous Story File Deleted.");
+    });
+  }
+}
+
 // Global Variables
 
-let remoteUrl = "https://710e-182-74-35-130.ngrok.io/"
+let userInfo = {}
+let remoteUrl = "https://c84b-182-74-35-130.ngrok.io/"
 let mainMenuInputAction = getInputAction("main_menu_input")
 let mainMenuOptions = "To List new Stories, press 2. To List Story Categories, press 3.\
                       To Request a new Story, press 4. To Repeat Current Menu, press 8.\
@@ -204,19 +271,17 @@ let categoryInput = getInputAction("category_input",false,2)
 let requestStoryInput = getInputAction("request_story",true)
 let storyReadingInput = getInputAction("story_reading")
 
-let storyOptionsText = ""
-let categoryOptionsText = ""
-let storyOptions = {}
-let categoryOptions = {}
-let currentStory = undefined
-let uuid = undefined
-let isAudioActive = false
-let isNewStoryRequest = true
-let currentStoryAudioFileName = undefined
-let storyPlayingStartingTime = undefined
-let storyTimeOutId = undefined
 
 app.get('/call', (req, res) => {
+  let ncco = []
+  let to = req.query.to || process.env.TO_NUMBER
+  if(userInfo.hasOwnProperty(to)){
+    if(userInfo[to]["currentStory"]){
+      ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+    }
+  }
+  ncco.push(getTalkAction(mainMenuOptions))
+  ncco.push(mainMenuInputAction)
   vonage.calls.create({
     to: [{
       type: 'phone',
@@ -226,10 +291,7 @@ app.get('/call', (req, res) => {
       type: 'phone',
       number: process.env.VONAGE_NUMBER,
     },
-    ncco: [
-      getTalkAction(mainMenuOptions),
-      mainMenuInputAction
-    ]
+    ncco: ncco
   }, (err, resp) => {
     if (err)
       console.error(err);
@@ -240,8 +302,33 @@ app.get('/call', (req, res) => {
 });
 
 app.post('/event', (req, res) => {
-  uuid = req.body.uuid;
-  console.log(req.body);
+  let body = req.body;
+  console.log(body);
+  let to = body.to;
+  if(body.status == 'answered'){
+    if(!userInfo.hasOwnProperty(to)){
+      userInfo[to] = {}
+      userInfo[to]["uuid"] = body.uuid
+      userInfo[to]["storyOptionsText"] = ""
+      userInfo[to]["categoryOptionsText"] = ""
+      userInfo[to]["storyOptions"] = {}
+      userInfo[to]["categoryOptions"] = {}
+      userInfo[to]["currentStory"] = undefined
+      userInfo[to]["isAudioActive"] = false
+      userInfo[to]["isNewStoryRequest"] = true
+      userInfo[to]["currentStoryAudioFileName"] = undefined
+      userInfo[to]["storyPlayingStartingTime"] = undefined
+      userInfo[to]["storyTimeOutId"] = undefined
+    }
+    else{
+      userInfo[to]["uuid"] = body.uuid
+    }
+  }
+  if(req.body.status == 'completed'){
+    if(userInfo[to]["isAudioActive"]){
+      callCompleted(to);
+    }
+  }
   res.status(200).send('');
 });
 
@@ -250,10 +337,11 @@ app.post('/event', (req, res) => {
 app.post('/main_menu_input',(req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
+  let to = responseObject.to;
   if(entered_digit == ''){
     let ncco = []
     ncco.push(getTalkAction("you didn't enter any digit"))
-    if(currentStory){
+    if(userInfo[to]["currentStory"]){
       ncco.push(getTalkAction("To continue reading Current Story, press 1."));
     }
     ncco.push(getTalkAction(mainMenuOptions));
@@ -263,14 +351,31 @@ app.post('/main_menu_input',(req,res) => {
   else{
     switch (entered_digit){
       case "1":
+        if(!userInfo[to]["currentStory"]){
+          res.json([
+            getTalkAction("sorry, you have chosen an invalid option"),
+            getTalkAction(mainMenuOptions),
+            mainMenuInputAction
+          ])
+        }
+        else {
+          startStream(to);
+          res.json([
+            {
+              "action":"stream",
+              "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
+              "loop":0,
+              "bargeIn":true
+            },
+            storyReadingInput
+          ]);
+        }
         break;
       case "2":
-        getStoryOptions().then(
+        getStoryOptions(to).then(
           function(value){
-            console.log(value);
-            console.log(storyOptionsText);
             res.json([
-              getTalkAction(storyOptionsText),
+              getTalkAction(userInfo[to]["storyOptionsText"]),
               storyInput
             ]);
           },
@@ -280,12 +385,10 @@ app.post('/main_menu_input',(req,res) => {
         );
         break;
       case "3":
-        getCategoryOptions().then(
+        getCategoryOptions(to).then(
           function(value){
-            console.log(value);
-            console.log(categoryOptionsText);
             res.json([
-              getTalkAction(categoryOptionsText),
+              getTalkAction(userInfo[to]["categoryOptionsText"]),
               categoryInput
             ]);
           },
@@ -315,7 +418,7 @@ app.post('/main_menu_input',(req,res) => {
       default:
         let ncco = []
         ncco.push(getTalkAction("sorry, you have chosen an invalid option"))
-        if(currentStory){
+        if(userInfo[to]["currentStory"]){
           ncco.push(getTalkAction("To continue reading Current Story, press 1."));
         }
         ncco.push(getTalkAction(mainMenuOptions));
@@ -329,21 +432,23 @@ app.post('/main_menu_input',(req,res) => {
 
 app.post('/story_input',(req,res) => {
   let responseObject = req.body;
-  // console.log(req.body);
   let entered_digit = responseObject.dtmf.digits;
+  let to = responseObject.to;
+
   if(entered_digit == ''){
     res.json([
       getTalkAction("you didn't enter any digit"),
-      getTalkAction(storyOptionsText),
+      getTalkAction(userInfo[to]["storyOptionsText"]),
       storyInput
     ]);
   }
   else{
-    if(storyOptions.hasOwnProperty(entered_digit)){
-      currentStory = storyOptions[entered_digit];
-      isNewStoryRequest = true;
-      startStream();
-      isNewStoryRequest = false;
+    if(userInfo[to]["storyOptions"].hasOwnProperty(entered_digit)){
+      isThereAnyRunningStory(to);
+      userInfo[to]["currentStory"] = userInfo[to]["storyOptions"][entered_digit];
+      userInfo[to]["isNewStoryRequest"] = true;
+      startStream(to);
+      userInfo[to]["isNewStoryRequest"] = false;
       res.json([
         {
           "action":"stream",
@@ -353,18 +458,11 @@ app.post('/story_input',(req,res) => {
         },
         storyReadingInput
       ]);
-      // res.json([
-      //   {
-      //     "action":"talk",
-      //     "text":"you have selected "+currentStory,
-      //     "language":"en-IN"
-      //   }
-      // ]);
     }
     else{
       res.json([
         getTalkAction("sorry, you have chosen invalid option."),
-        getTalkAction(storyOptionsText),
+        getTalkAction(userInfo[to]["storyOptionsText"]),
         storyInput
       ])
     }
@@ -374,6 +472,8 @@ app.post('/story_input',(req,res) => {
 app.post("/story_reading",(req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
+  let to = responseObject.to;
+
   if(entered_digit == ''){
     res.json([
       {
@@ -388,11 +488,11 @@ app.post("/story_reading",(req,res) => {
   else{
     switch(entered_digit){
       case "1":
-        if(isAudioActive){
-          stopStream();
+        if(userInfo[to]["isAudioActive"]){
+          stopStream(to);
         }
         else{
-          startStream();
+          startStream(to);
         }
         res.json([
           {
@@ -405,6 +505,16 @@ app.post("/story_reading",(req,res) => {
         ]);
         break;
       case "2":
+        if(userInfo[to]["isAudioActive"]){
+          stopStream(to);
+        }
+        let ncco = []
+        if(userInfo[to]["currentStory"]){
+          ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+        }
+        ncco.push(getTalkAction(mainMenuOptions));
+        ncco.push(mainMenuInputAction);
+        res.json(ncco);
         break;
       default:
         res.json([
@@ -423,22 +533,22 @@ app.post("/story_reading",(req,res) => {
 app.post('/category_input',(req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
+  let to = responseObject.to;
+
   if(entered_digit == ''){
     res.json([
       getTalkAction("you didn't enter any digit"),
-      getTalkAction(categoryOptionsText),
+      getTalkAction(userInfo[to]["categoryOptionsText"]),
       categoryInput
     ]);
   }
   else{
-    if(categoryOptions.hasOwnProperty(entered_digit)){
-      let categoryName = categoryOptions[entered_digit];
-      getStoryOptions(categoryName).then(
+    if(userInfo[to]["categoryOptions"].hasOwnProperty(entered_digit)){
+      let categoryName = userInfo[to]["categoryOptions"][entered_digit];
+      getStoryOptions(to,categoryName).then(
         function(value){
-          console.log(value);
-          console.log(storyOptionsText);
           res.json([
-            getTalkAction(storyOptionsText),
+            getTalkAction(userInfo[to]["storyOptionsText"]),
             storyInput
           ]);
         },
@@ -450,7 +560,7 @@ app.post('/category_input',(req,res) => {
     else{
       res.json([
         getTalkAction("sorry, you have chosen invalid option."),
-        getTalkAction(categoryOptionsText),
+        getTalkAction(userInfo[to]["categoryOptionsText"]),
         categoryInput
       ]);
     }
