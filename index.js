@@ -349,6 +349,7 @@ app.post('/main_menu_input',(req,res) => {
     res.json(ncco);
   }
   else{
+    let ncco = []
     switch (entered_digit){
       case "1":
         if(!userInfo[to]["currentStory"]){
@@ -407,16 +408,19 @@ app.post('/main_menu_input',(req,res) => {
       ]);
         break;
       case "8":
-        res.json([
-          getTalkAction(mainMenuOptions),
-          mainMenuInputAction
-        ]);
+        if(userInfo[to]["currentStory"]){
+          ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+        }
+        ncco.push(getTalkAction(mainMenuOptions));
+        ncco.push(mainMenuInputAction);
+        res.json(ncco);
         break;
       case "9":
-        res.json([]);
+        res.json({
+          action:"hangup"
+        });
         break;
       default:
-        let ncco = []
         ncco.push(getTalkAction("sorry, you have chosen an invalid option"))
         if(userInfo[to]["currentStory"]){
           ncco.push(getTalkAction("To continue reading Current Story, press 1."));
@@ -437,7 +441,7 @@ app.post('/story_input',(req,res) => {
 
   if(entered_digit == ''){
     res.json([
-      getTalkAction("you didn't enter any digit"),
+      getTalkAction("Sorry, You have not chosen any option."),
       getTalkAction(userInfo[to]["storyOptionsText"]),
       storyInput
     ]);
@@ -537,7 +541,7 @@ app.post('/category_input',(req,res) => {
 
   if(entered_digit == ''){
     res.json([
-      getTalkAction("you didn't enter any digit"),
+      getTalkAction("Sorry, you have not chosen any option."),
       getTalkAction(userInfo[to]["categoryOptionsText"]),
       categoryInput
     ]);
