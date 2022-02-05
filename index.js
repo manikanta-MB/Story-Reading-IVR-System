@@ -36,11 +36,11 @@ function getStreamAction(url,needBargeIn=true){
   return streamAction
 }
 
-function getTalkAction(textToTalk){
+function getTalkAction(textToTalk,needBargeIn=true){
   let talkAction = {
     "action": "talk",
     "text": textToTalk,
-    "bargeIn":true,
+    "bargeIn":needBargeIn,
     "language":"en-IN",
     "level":1
   }
@@ -270,7 +270,7 @@ let storyInput = getInputAction("story_input",false,2)
 let categoryInput = getInputAction("category_input",false,2)
 let requestStoryInput = getInputAction("request_story",true)
 let storyReadingInput = getInputAction("story_reading")
-
+let confirmRequestedStoryInput = getInputAction("confirm_request_story")
 
 app.get('/call', (req, res) => {
   let ncco = []
@@ -400,10 +400,7 @@ app.post('/main_menu_input',(req,res) => {
         break;
       case "4":
         res.json([
-          {
-          "action": "talk",
-          "text": "please speak out the story name, you want"
-          },
+          getTalkAction("please speak out the story name, you want",false),
           requestStoryInput
       ]);
         break;
@@ -567,6 +564,64 @@ app.post('/category_input',(req,res) => {
         getTalkAction(userInfo[to]["categoryOptionsText"]),
         categoryInput
       ]);
+    }
+  }
+});
+
+app.post("/request_story", (req,res) => {
+  let requestObj = req.body;
+  if(requestObj.speech.timeout_reason == 'start_timeout'){
+    res.json([
+      getTalkAction("Sorry, you have not spoken anything.",false),
+      getTalkAction("please speak out the story name, you want",false),
+      requestStoryInput
+    ]);
+  }
+  else if(requestObj.speech.hasOwnProperty("error") || !requestObj.speech.results || (requestObj.speech.results.length == 0)){
+    res.json([
+      getTalkAction("Sorry, we are not able to analyze your voice, please speak out again.",false),
+      requestStoryInput
+    ]);
+  }
+  else{
+    let spokenData = requestObj.speech.results[0].text
+    res.json([
+      getTalkAction("your requested story is "+spokenData,false),
+      getTalkAction("To save, press 1. To cancel, press 2"),
+      confirmRequestedStoryInput
+    ])
+  }
+});
+
+app.post("/confirm_request_story", (req,res) => {
+  let responseObject = req.body;
+  let entered_digit = responseObject.dtmf.digits;
+  if(entered_digit == ''){
+    res.json([
+      getTalkAction("Sorry, you have not chosen any option.",false),
+      getTalkAction("To save, press 1. To cancel, press 2"),
+      confirmRequestedStoryInput
+    ]);
+  }
+  else{
+    switch(entered_digit){
+      case "1":
+        res.json([
+          getTalkAction("Thank you. your requested story was saved.",false)
+        ]);
+        break;
+      case "2":
+        res.json([
+          getTalkAction("Thank you. your requested story was not saved.",false)
+        ]);
+        break;
+      default:
+        res.json([
+          getTalkAction("Sorry, you have chosen an invalid option.",false),
+          getTalkAction("To save, press 1. To cancel, press 2"),
+          confirmRequestedStoryInput
+        ]);
+        break;
     }
   }
 });
