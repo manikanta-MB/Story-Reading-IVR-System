@@ -141,7 +141,7 @@ function storyCompleted(to){
 function startStream(to){
   userInfo[to]["isAudioActive"] = true;
   if(userInfo[to]["isNewStoryRequest"]){
-    let url = "https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/baseinput/input%202.mp3?raw=true"
+    let url = "https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/NSC_.mp3?raw=true"
     userInfo[to]["currentStoryAudioFileName"] = uuidv4() + ".mp3"
     https.get(url,(res) => {
     	const path = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
@@ -187,7 +187,7 @@ function stopStream(to){
     if(err) { console.error(err); }
     else {
         console.log(res);
-        let timeDifference = ((Date.now() - userInfo[to]["storyPlayingStartingTime"] - 1000)/1000).toFixed(0);
+        let timeDifference = ((Date.now() - userInfo[to]["storyPlayingStartingTime"] - 1500)/1000).toFixed(0);
         const currentPath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
 
         getAudioDurationInSeconds(currentPath).then((duration) => {
@@ -219,7 +219,7 @@ function stopStream(to){
 function callCompleted(to){
   clearTimeout(userInfo[to]["storyTimeOutId"]);
   userInfo[to]["isAudioActive"] = false;
-  let timeDifference = ((Date.now() - userInfo[to]["storyPlayingStartingTime"] - 1000)/1000).toFixed(0);
+  let timeDifference = ((Date.now() - userInfo[to]["storyPlayingStartingTime"] - 1500)/1000).toFixed(0);
   const currentPath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
 
   getAudioDurationInSeconds(currentPath).then((duration) => {
@@ -261,7 +261,7 @@ function isThereAnyRunningStory(to){
 // Global Variables
 
 let userInfo = {}
-let remoteUrl = "https://c84b-182-74-35-130.ngrok.io/"
+let remoteUrl = "https://64ff-36-255-87-144.ngrok.io/"
 let mainMenuInputAction = getInputAction("main_menu_input")
 let mainMenuOptions = "To List new Stories, press 2. To List Story Categories, press 3.\
                       To Request a new Story, press 4. To Repeat Current Menu, press 8.\
@@ -451,6 +451,7 @@ app.post('/story_input',(req,res) => {
       startStream(to);
       userInfo[to]["isNewStoryRequest"] = false;
       res.json([
+        getTalkAction("Please wait, your story is being downloaded",false),
         {
           "action":"stream",
           "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
@@ -509,13 +510,15 @@ app.post("/story_reading",(req,res) => {
         if(userInfo[to]["isAudioActive"]){
           stopStream(to);
         }
-        let ncco = []
-        if(userInfo[to]["currentStory"]){
-          ncco.push(getTalkAction("To continue reading Current Story, press 1."));
-        }
-        ncco.push(getTalkAction(mainMenuOptions));
-        ncco.push(mainMenuInputAction);
-        res.json(ncco);
+        setTimeout(() => {
+          let ncco = []
+          if(userInfo[to]["currentStory"]){
+            ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+          }
+          ncco.push(getTalkAction(mainMenuOptions));
+          ncco.push(mainMenuInputAction);
+          res.json(ncco);
+        },2000);
         break;
       default:
         res.json([
