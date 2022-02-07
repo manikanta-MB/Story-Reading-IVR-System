@@ -21,12 +21,12 @@ client.connect();
 module.exports = client;
 
 
-// client.query(`select * from story_book`,(err,result) => {
+// client.query(`select exists(select * from story_book where name = $1)`,["Steve Jobs"],(err,result) => {
 //     if(err){
 //       console.log(err);
 //     }
 //     else{
-//       console.log(result.rows);
+//       console.log(result.rows[0].exists);
 //     }
 //     client.end();
 // });

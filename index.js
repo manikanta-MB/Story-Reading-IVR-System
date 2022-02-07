@@ -2,7 +2,7 @@ require('dotenv').config();
 const path = require('path')
 const {v4 : uuidv4} = require('uuid');
 const fs = require('fs');
-const https = require('follow-redirects').https;
+// const https = require('follow-redirects').https;
 const MP3Cutter = require('mp3-cutter');
 const { getAudioDurationInSeconds } = require('get-audio-duration');
 const Vonage = require('@vonage/server-sdk');
@@ -36,10 +36,14 @@ function getStreamAction(url,needBargeIn=true){
   return streamAction
 }
 
-function getTalkAction(textToTalk,needBargeIn=true){
+function getTalkAction(textToTalk,to,needBargeIn=true){
+  let speechRate = 'medium'
+  if(userInfo.hasOwnProperty(to)){
+    speechRate = userInfo[to]["speechRate"]
+  }
   let talkAction = {
     "action": "talk",
-    "text": textToTalk,
+    "text": "<speak><prosody rate='"+`${speechRate}`+"'>"+`${textToTalk}</prosody></speak>`,
     "bargeIn":needBargeIn,
     "language":"en-IN",
     "level":1
@@ -81,56 +85,57 @@ async function getStoryOptions(to,category=undefined){
   let result = ""
   if(category){
     result = await client.query(`select * from story_book where category_id = 
-    (select id from story_category where name=$1)`,
+    (select id from story_category where name=$1) OFFSET ${userInfo[to]["previousStoryNumber"]} ROWS FETCH FIRST 5 ROWS ONLY`,
     [category]
     )
   }
   else{
-    result = await client.query(`select * from story_book`);
+    result = await client.query(`select * from story_book OFFSET ${userInfo[to]["previousStoryNumber"]} ROWS FETCH FIRST 5 ROWS ONLY `);
   }
+  userInfo[to]["previousStoryNumber"] += 4
   userInfo[to]["storyOptionsText"] = ""
   userInfo[to]["storyOptions"] = {}
-  for(let i=0; i < result.rows.length; i++){
-    let book = result.rows[i];
+  let rows = result.rows.slice(0,4)
+  for(let i=0; i < rows.length; i++){
+    let book = rows[i];
     userInfo[to]["storyOptionsText"] += "To select "+book.name+", press "+(i+1)+". ";
     userInfo[to]["storyOptions"][(i+1).toString()] = book.name;
   }
-  return "successfully fetched the stories";
+  if(result.rows.length > 4){
+    userInfo[to]["storyOptionsText"] += "To list next top 4 Stories, press 5. "
+  }
+  userInfo[to]["storyOptionsText"] += "To repeat current menu, press 8. To go to previous menu, press 9."
+  return "succesfully fetched the stories.";
 }
 
 async function getCategoryOptions(to){
-  const result = await client.query(`select * from story_category`);
+  const result = await client.query(`select * from story_category OFFSET ${userInfo[to]["previousCategoryNumber"]} ROWS FETCH FIRST 5 ROWS ONLY`);
+  userInfo[to]["previousCategoryNumber"] += 4
   userInfo[to]["categoryOptionsText"] = ""
   userInfo[to]["categoryOptions"] = {}
-  for(let i=0; i < result.rows.length; i++){
-    let category = result.rows[i];
+  let rows = result.rows.slice(0,4)
+  for(let i=0; i < rows.length; i++){
+    let category = rows[i];
     userInfo[to]["categoryOptionsText"] += "To select " + category.name + ", press "+(i+1)+". ";
     userInfo[to]["categoryOptions"][(i+1).toString()] = category.name;
   }
-  return "successfully fetched the categories";
+  if(result.rows.length > 4){
+    userInfo[to]["categoryOptionsText"] += "To list next top 4 Categories, press 5. "
+  }
+  userInfo[to]["categoryOptionsText"] += "To repeat current menu, press 8. To go to previous menu, press 9."
+  return "successfully fetched the categories.";
 }
 
 function storyCompleted(to){
   userInfo[to]["isAudioActive"] = false
   userInfo[to]["currentStory"] = undefined
-  fs.unlink(`${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`,function(err){
-    if(err){
-      console.log(err);
-    }
-    console.log("File Deleted.");
-  });
   vonage.calls.update(userInfo[to]["uuid"], 
     {
       "action": "transfer",
       "destination": {
         "type": "ncco",
         "ncco": [
-          {
-            "action": "talk",
-            "text": "Your Story was completed. Thank you for listening.",
-            "language": "en-IN",
-            "level": 1
-          }
+          getTalkAction("Your Story was completed. Thank you for listening.",to,false)
         ]
       }
     },(req, res) => {
@@ -140,44 +145,17 @@ function storyCompleted(to){
 
 function startStream(to){
   userInfo[to]["isAudioActive"] = true;
-  if(userInfo[to]["isNewStoryRequest"]){
-    let url = "https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/NSC_.mp3?raw=true"
-    userInfo[to]["currentStoryAudioFileName"] = uuidv4() + ".mp3"
-    https.get(url,(res) => {
-    	const path = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
-    	const filePath = fs.createWriteStream(path);
-    	res.pipe(filePath);
-    	filePath.on('finish',() => {
-    		filePath.close();
-    		console.log('Download Completed.');
-
-        vonage.calls.stream.start(userInfo[to]["uuid"], { stream_url: [remoteUrl + `audio/${userInfo[to]["currentStoryAudioFileName"]}`], level: 1 }, (err, res) => {
-          if(err) { console.error(err); }
-          else {
-              console.log(res);
-              userInfo[to]["storyPlayingStartingTime"] = Date.now();
-              getAudioDurationInSeconds(path).then((duration) => {
-                  userInfo[to]["storyTimeOutId"] = setTimeout(() => { storyCompleted(to) },(duration+1).toFixed(0)*1000);
-              });
-          }
+  vonage.calls.stream.start(userInfo[to]["uuid"], { stream_url: [remoteUrl + `audio/${userInfo[to]["currentStoryAudioFileName"]}`], level: 1 }, (err, res) => {
+    if(err) { console.error(err); }
+    else {
+        console.log(res);
+        userInfo[to]["storyPlayingStartingTime"] = Date.now();
+        const path = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
+        getAudioDurationInSeconds(path).then((duration) => {
+          userInfo[to]["storyTimeOutId"] = setTimeout( () => { storyCompleted(to) },(duration+1).toFixed(0)*1000);
         });
-
-    	})
-    });
-  }
-  else{
-    vonage.calls.stream.start(userInfo[to]["uuid"], { stream_url: [remoteUrl + `audio/${userInfo[to]["currentStoryAudioFileName"]}`], level: 1 }, (err, res) => {
-      if(err) { console.error(err); }
-      else {
-          console.log(res);
-          userInfo[to]["storyPlayingStartingTime"] = Date.now();
-          const path = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
-          getAudioDurationInSeconds(path).then((duration) => {
-            userInfo[to]["storyTimeOutId"] = setTimeout( () => { storyCompleted(to) },(duration+1).toFixed(0)*1000);
-          });
-      }
-    });
-  }
+    }
+  });
 }
 
 function stopStream(to){
@@ -202,12 +180,6 @@ function stopStream(to){
               src: currentPath,
               target: newPath,
               start: timeDifference
-            });
-            fs.unlink(currentPath,function(err){
-              if(err){
-                console.log(err);
-              }
-              console.log("File deleted.");
             });
             console.log("cut completed.");
           }
@@ -235,52 +207,65 @@ function callCompleted(to){
         target: newPath,
         start: timeDifference
       });
-      fs.unlink(currentPath,function(err){
-        if(err){
-          console.log(err);
-        }
-        console.log("File deleted.");
-      });
       console.log("cut completed.");
     }
   });
 }
 
-function isThereAnyRunningStory(to){
-  if(userInfo[to]["currentStory"]){
-    const filePath = `${__dirname}/AudioFiles/${userInfo[to]["currentStoryAudioFileName"]}`;
-    fs.unlink(filePath,function(err){
-      if(err){
-        console.log(err);
-      }
-      console.log("Previous Story File Deleted.");
-    });
+async function checkStoryExistency(to,requestedStoryName){
+  const result = await client.query(`select * from story_book where name = $1`,[requestedStoryName]);
+  if(result.rows.length > 0){
+    userInfo[to]["currentStory"] = requestedStoryName
+    userInfo[to]["currentStoryAudioFileName"] = "source.mp3" // result.rows[0].content_path
+    return true
+  }
+  else{
+    return false
   }
 }
 
 // Global Variables
 
 let userInfo = {}
-let remoteUrl = "https://64ff-36-255-87-144.ngrok.io/"
+let conversationIdToMobileNumber = {}
+let remoteUrl = "https://d297-2401-4900-16eb-47d9-9827-3ebe-a273-8256.ngrok.io/"
 let mainMenuInputAction = getInputAction("main_menu_input")
 let mainMenuOptions = "To List new Stories, press 2. To List Story Categories, press 3.\
                       To Request a new Story, press 4. To Repeat Current Menu, press 8.\
-                      To exit from this menu, press 9."
+                      To exit from this menu, press 9. To increment speech Rate, press star.\
+                      To decrement speech Rate, press ash."
 let storyInput = getInputAction("story_input",false,2)
 let categoryInput = getInputAction("category_input",false,2)
 let requestStoryInput = getInputAction("request_story",true)
 let storyReadingInput = getInputAction("story_reading")
 let confirmRequestedStoryInput = getInputAction("confirm_request_story")
+let speechRateIncrements = {
+  "x-slow":"slow",
+  "slow":"medium",
+  "medium":"fast",
+  "fast":"x-fast",
+  "x-fast":"x-fast"
+}
+let speechRateDecrements = {
+  "x-fast":"fast",
+  "fast":"medium",
+  "medium":"slow",
+  "slow":"x-slow",
+  "x-slow":"x-slow"
+}
 
 app.get('/call', (req, res) => {
   let ncco = []
   let to = req.query.to || process.env.TO_NUMBER
   if(userInfo.hasOwnProperty(to)){
     if(userInfo[to]["currentStory"]){
-      ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+      ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
     }
   }
-  ncco.push(getTalkAction(mainMenuOptions))
+  else{
+    ncco.push(getTalkAction("To start reading a new Story, press 1.",to))
+  }
+  ncco.push(getTalkAction(mainMenuOptions,to))
   ncco.push(mainMenuInputAction)
   vonage.calls.create({
     to: [{
@@ -306,6 +291,7 @@ app.post('/event', (req, res) => {
   console.log(body);
   let to = body.to;
   if(body.status == 'answered'){
+    conversationIdToMobileNumber[body.conversation_uuid] = to;
     if(!userInfo.hasOwnProperty(to)){
       userInfo[to] = {}
       userInfo[to]["uuid"] = body.uuid
@@ -315,10 +301,12 @@ app.post('/event', (req, res) => {
       userInfo[to]["categoryOptions"] = {}
       userInfo[to]["currentStory"] = undefined
       userInfo[to]["isAudioActive"] = false
-      userInfo[to]["isNewStoryRequest"] = true
       userInfo[to]["currentStoryAudioFileName"] = undefined
       userInfo[to]["storyPlayingStartingTime"] = undefined
       userInfo[to]["storyTimeOutId"] = undefined
+      userInfo[to]["previousStoryNumber"] = undefined
+      userInfo[to]["previousCategoryNumber"] = undefined
+      userInfo[to]["speechRate"] = "medium"
     }
     else{
       userInfo[to]["uuid"] = body.uuid
@@ -336,49 +324,49 @@ app.post('/event', (req, res) => {
 
 app.post('/main_menu_input',(req,res) => {
   let responseObject = req.body;
+  console.log(responseObject);
   let entered_digit = responseObject.dtmf.digits;
-  let to = responseObject.to;
   if(entered_digit == ''){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     let ncco = []
-    ncco.push(getTalkAction("you didn't enter any digit"))
+    ncco.push(getTalkAction("you didn't enter any digit",to))
     if(userInfo[to]["currentStory"]){
-      ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+      ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
     }
-    ncco.push(getTalkAction(mainMenuOptions));
+    else{
+      ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+    }
+    ncco.push(getTalkAction(mainMenuOptions,to));
     ncco.push(mainMenuInputAction);
     res.json(ncco);
   }
   else{
+    let to = responseObject.to;
     let ncco = []
     switch (entered_digit){
       case "1":
         if(!userInfo[to]["currentStory"]){
-          res.json([
-            getTalkAction("sorry, you have chosen an invalid option"),
-            getTalkAction(mainMenuOptions),
-            mainMenuInputAction
-          ])
+          userInfo[to]["currentStory"] = "new"
+          userInfo[to]["currentStoryAudioFileName"] = "default.mp3"
         }
-        else {
-          startStream(to);
-          res.json([
-            {
-              "action":"stream",
-              "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
-              "loop":0,
-              "bargeIn":true
-            },
-            storyReadingInput
-          ]);
-        }
+        startStream(to);
+        res.json([
+          {
+            "action":"stream",
+            "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
+            "loop":0,
+            "bargeIn":true
+          },
+          storyReadingInput
+        ]);
         break;
       case "2":
+        userInfo[to]["previousStoryNumber"] = 0
         getStoryOptions(to).then(
           function(value){
-            res.json([
-              getTalkAction(userInfo[to]["storyOptionsText"]),
-              storyInput
-            ]);
+            ncco.push(getTalkAction(userInfo[to]["storyOptionsText"],to))
+            ncco.push(storyInput)
+            res.json(ncco);
           },
           function(err){
             console.log(err);
@@ -386,12 +374,12 @@ app.post('/main_menu_input',(req,res) => {
         );
         break;
       case "3":
+        userInfo[to]["previousCategoryNumber"] = 0
         getCategoryOptions(to).then(
           function(value){
-            res.json([
-              getTalkAction(userInfo[to]["categoryOptionsText"]),
-              categoryInput
-            ]);
+            ncco.push(getTalkAction(userInfo[to]["categoryOptionsText"],to))
+            ncco.push(categoryInput)
+            res.json(ncco);
           },
           function(err){
             console.log(err);
@@ -400,15 +388,18 @@ app.post('/main_menu_input',(req,res) => {
         break;
       case "4":
         res.json([
-          getTalkAction("please speak out the story name, you want",false),
+          getTalkAction("please speak out the story name, you want",to,false),
           requestStoryInput
       ]);
         break;
       case "8":
         if(userInfo[to]["currentStory"]){
-          ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+          ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
         }
-        ncco.push(getTalkAction(mainMenuOptions));
+        else{
+          ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+        }
+        ncco.push(getTalkAction(mainMenuOptions,to));
         ncco.push(mainMenuInputAction);
         res.json(ncco);
         break;
@@ -417,12 +408,39 @@ app.post('/main_menu_input',(req,res) => {
           action:"hangup"
         });
         break;
-      default:
-        ncco.push(getTalkAction("sorry, you have chosen an invalid option"))
+      case "*":
+        userInfo[to]["speechRate"] = speechRateIncrements[userInfo[to]["speechRate"]];
         if(userInfo[to]["currentStory"]){
-          ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+          ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
         }
-        ncco.push(getTalkAction(mainMenuOptions));
+        else{
+          ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+        }
+        ncco.push(getTalkAction(mainMenuOptions,to));
+        ncco.push(mainMenuInputAction);
+        res.json(ncco);
+        break;
+      case "#":
+        userInfo[to]["speechRate"] = speechRateDecrements[userInfo[to]["speechRate"]];
+        if(userInfo[to]["currentStory"]){
+          ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
+        }
+        else{
+          ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+        }
+        ncco.push(getTalkAction(mainMenuOptions,to));
+        ncco.push(mainMenuInputAction);
+        res.json(ncco);
+        break;
+      default:
+        ncco.push(getTalkAction("sorry, you have chosen an invalid option",to))
+        if(userInfo[to]["currentStory"]){
+          ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
+        }
+        else{
+          ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+        }
+        ncco.push(getTalkAction(mainMenuOptions,to));
         ncco.push(mainMenuInputAction);
         res.json(ncco);
     }
@@ -434,39 +452,90 @@ app.post('/main_menu_input',(req,res) => {
 app.post('/story_input',(req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
-  let to = responseObject.to;
-
   if(entered_digit == ''){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     res.json([
-      getTalkAction("Sorry, You have not chosen any option."),
-      getTalkAction(userInfo[to]["storyOptionsText"]),
+      getTalkAction("Sorry, You have not chosen any option.",to),
+      getTalkAction(userInfo[to]["storyOptionsText"],to),
       storyInput
     ]);
   }
   else{
-    if(userInfo[to]["storyOptions"].hasOwnProperty(entered_digit)){
-      isThereAnyRunningStory(to);
-      userInfo[to]["currentStory"] = userInfo[to]["storyOptions"][entered_digit];
-      userInfo[to]["isNewStoryRequest"] = true;
-      startStream(to);
-      userInfo[to]["isNewStoryRequest"] = false;
-      res.json([
-        getTalkAction("Please wait, your story is being downloaded",false),
-        {
-          "action":"stream",
-          "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
-          "loop":0,
-          "bargeIn":true
-        },
-        storyReadingInput
-      ]);
-    }
-    else{
-      res.json([
-        getTalkAction("sorry, you have chosen invalid option."),
-        getTalkAction(userInfo[to]["storyOptionsText"]),
-        storyInput
-      ])
+    let to = responseObject.to;
+    let ncco = []
+    switch(entered_digit){
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+        if(userInfo[to]["storyOptions"][entered_digit] == undefined){
+          res.json([
+            getTalkAction("sorry, you have chosen invalid option.",to),
+            getTalkAction(userInfo[to]["storyOptionsText"],to),
+            storyInput
+          ]);
+        }
+        else{
+          userInfo[to]["currentStory"] = userInfo[to]["storyOptions"][entered_digit];
+          userInfo[to]["currentStoryAudioFileName"] = "source.mp3"
+          startStream(to);
+          res.json([
+            getTalkAction("Please wait for 2 to 3 minutes, your story is being downloaded",to,false),
+            {
+              "action":"stream",
+              "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
+              "loop":0,
+              "bargeIn":true
+            },
+            storyReadingInput
+          ]);
+        }
+        break;
+      case "5":
+        if(userInfo[to]["storyOptionsText"].includes("press 5.")){
+          getStoryOptions(to).then(
+            function(value){
+              ncco.push(getTalkAction(userInfo[to]["storyOptionsText"],to))
+              ncco.push(storyInput)
+              res.json(ncco);
+            },
+            function(err){
+              console.log(err);
+            }
+          );
+        }
+        else{
+          res.json([
+            getTalkAction("sorry, you have chosen invalid option.",to),
+            getTalkAction(userInfo[to]["storyOptionsText"],to),
+            storyInput
+          ]);
+        }
+        break;
+      case "8":
+        res.json([
+          getTalkAction(userInfo[to]["storyOptionsText"],to),
+          storyInput
+        ]);
+        break;
+      case "9":
+        if(userInfo[to]["currentStory"]){
+          ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
+        }
+        else{
+          ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+        }
+        ncco.push(getTalkAction(mainMenuOptions,to));
+        ncco.push(mainMenuInputAction);
+        res.json(ncco);
+        break;
+      default:
+        res.json([
+          getTalkAction("sorry, you have chosen invalid option.",to),
+          getTalkAction(userInfo[to]["storyOptionsText"],to),
+          storyInput
+        ]);
+        break;
     }
   }
 });
@@ -474,9 +543,9 @@ app.post('/story_input',(req,res) => {
 app.post("/story_reading",(req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
-  let to = responseObject.to;
 
   if(entered_digit == ''){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     res.json([
       {
         "action":"stream",
@@ -488,6 +557,8 @@ app.post("/story_reading",(req,res) => {
     ]);
   }
   else{
+    let to = responseObject.to;
+    let ncco = []
     switch(entered_digit){
       case "1":
         if(userInfo[to]["isAudioActive"]){
@@ -511,11 +582,13 @@ app.post("/story_reading",(req,res) => {
           stopStream(to);
         }
         setTimeout(() => {
-          let ncco = []
           if(userInfo[to]["currentStory"]){
-            ncco.push(getTalkAction("To continue reading Current Story, press 1."));
+            ncco.push(getTalkAction("To continue reading Current Story, press 1.",to));
           }
-          ncco.push(getTalkAction(mainMenuOptions));
+          else{
+            ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+          }
+          ncco.push(getTalkAction(mainMenuOptions,to));
           ncco.push(mainMenuInputAction);
           res.json(ncco);
         },2000);
@@ -537,36 +610,90 @@ app.post("/story_reading",(req,res) => {
 app.post('/category_input',(req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
-  let to = responseObject.to;
 
   if(entered_digit == ''){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     res.json([
-      getTalkAction("Sorry, you have not chosen any option."),
-      getTalkAction(userInfo[to]["categoryOptionsText"]),
+      getTalkAction("Sorry, you have not chosen any option.",to),
+      getTalkAction(userInfo[to]["categoryOptionsText"],to),
       categoryInput
     ]);
   }
   else{
-    if(userInfo[to]["categoryOptions"].hasOwnProperty(entered_digit)){
-      let categoryName = userInfo[to]["categoryOptions"][entered_digit];
-      getStoryOptions(to,categoryName).then(
-        function(value){
+    let to = responseObject.to;
+    let ncco = []
+    switch(entered_digit){
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+        let categoryName = userInfo[to]["categoryOptions"][entered_digit];
+        if(categoryName == undefined){
           res.json([
-            getTalkAction(userInfo[to]["storyOptionsText"]),
-            storyInput
+            getTalkAction("sorry, you have chosen invalid option.",to),
+            getTalkAction(userInfo[to]["categoryOptionsText"],to),
+            categoryInput
           ]);
-        },
-        function(err){
-          console.log(err);
         }
-      );
-    }
-    else{
-      res.json([
-        getTalkAction("sorry, you have chosen invalid option."),
-        getTalkAction(userInfo[to]["categoryOptionsText"]),
-        categoryInput
-      ]);
+        else{
+          userInfo[to]["previousStoryNumber"] = 0
+          getStoryOptions(to,categoryName).then(
+            function(value){
+              ncco.push(getTalkAction(userInfo[to]["storyOptionsText"],to))
+              ncco.push(storyInput)
+              res.json(ncco);
+            },
+            function(err){
+              console.log(err);
+            }
+          );
+        }
+        break;
+      case "5":
+        if(userInfo[to]["categoryOptionsText"].includes("press 5.")){
+          getCategoryOptions(to).then(
+            function(value){
+              ncco.push(getTalkAction(userInfo[to]["categoryOptionsText"],to))
+              ncco.push(categoryInput)
+              res.json(ncco);
+            },
+            function(err){
+              console.log(err);
+            }
+          );
+        }
+        else{
+          res.json([
+            getTalkAction("sorry, you have chosen invalid option.",to),
+            getTalkAction(userInfo[to]["categoryOptionsText"],to),
+            categoryInput
+          ]);
+        }
+        break;
+      case "8":
+        res.json([
+          getTalkAction(userInfo[to]["categoryOptionsText"],to),
+          categoryInput
+        ]);
+        break;
+      case "9":
+        if(userInfo[to]["currentStory"]){
+          ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
+        }
+        else{
+          ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
+        }
+        ncco.push(getTalkAction(mainMenuOptions,to));
+        ncco.push(mainMenuInputAction);
+        res.json(ncco);
+        break;
+      default:
+        res.json([
+          getTalkAction("sorry, you have chosen invalid option.",to),
+          getTalkAction(userInfo[to]["categoryOptionsText"],to),
+          categoryInput
+        ]);
+        break;
     }
   }
 });
@@ -574,25 +701,48 @@ app.post('/category_input',(req,res) => {
 app.post("/request_story", (req,res) => {
   let requestObj = req.body;
   if(requestObj.speech.timeout_reason == 'start_timeout'){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     res.json([
-      getTalkAction("Sorry, you have not spoken anything.",false),
-      getTalkAction("please speak out the story name, you want",false),
+      getTalkAction("Sorry, you have not spoken anything.",to,false),
+      getTalkAction("please speak out the story name, you want",to,false),
       requestStoryInput
     ]);
   }
   else if(requestObj.speech.hasOwnProperty("error") || !requestObj.speech.results || (requestObj.speech.results.length == 0)){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     res.json([
-      getTalkAction("Sorry, we are not able to analyze your voice, please speak out again.",false),
+      getTalkAction("Sorry, we are not able to analyze your voice, please speak out again.",to,false),
       requestStoryInput
     ]);
   }
   else{
     let spokenData = requestObj.speech.results[0].text
-    res.json([
-      getTalkAction("your requested story is "+spokenData,false),
-      getTalkAction("To save, press 1. To cancel, press 2"),
-      confirmRequestedStoryInput
-    ])
+    console.log("requested Story Name ",spokenData);
+    let to = requestObj.to
+    checkStoryExistency(to,spokenData).then(function(isStoryExist){
+      if(isStoryExist){
+        startStream(to);
+        res.json([
+          getTalkAction("Please wait for 2 to 3 minutes, your story is being loaded",to,false),
+          {
+            "action":"stream",
+            "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
+            "loop":0,
+            "bargeIn":true
+          },
+          storyReadingInput
+        ]);
+      }
+      else{
+        res.json([
+          getTalkAction("Your requested Story was not available right now. we will make it available for you later. Please request any other Story.",to,false),
+          requestStoryInput
+        ]);
+      }
+    },
+    function(err){
+      console.log(err);
+    });
   }
 });
 
@@ -600,28 +750,30 @@ app.post("/confirm_request_story", (req,res) => {
   let responseObject = req.body;
   let entered_digit = responseObject.dtmf.digits;
   if(entered_digit == ''){
+    let to = conversationIdToMobileNumber[responseObject.conversation_uuid]
     res.json([
-      getTalkAction("Sorry, you have not chosen any option.",false),
-      getTalkAction("To save, press 1. To cancel, press 2"),
+      getTalkAction("Sorry, you have not chosen any option.",to,false),
+      getTalkAction("To save, press 1. To cancel, press 2",to),
       confirmRequestedStoryInput
     ]);
   }
   else{
+    let to = responseObject.to;
     switch(entered_digit){
       case "1":
         res.json([
-          getTalkAction("Thank you. your requested story was saved.",false)
+          getTalkAction("Thank you. your requested story was saved.",to,false)
         ]);
         break;
       case "2":
         res.json([
-          getTalkAction("Thank you. your requested story was not saved.",false)
+          getTalkAction("Thank you. your requested story was not saved.",to,false)
         ]);
         break;
       default:
         res.json([
-          getTalkAction("Sorry, you have chosen an invalid option.",false),
-          getTalkAction("To save, press 1. To cancel, press 2"),
+          getTalkAction("Sorry, you have chosen an invalid option.",to,false),
+          getTalkAction("To save, press 1. To cancel, press 2",to),
           confirmRequestedStoryInput
         ]);
         break;
