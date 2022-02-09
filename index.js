@@ -228,7 +228,7 @@ async function checkStoryExistency(to,requestedStoryName){
 
 let userInfo = {}
 let conversationIdToMobileNumber = {}
-let remoteUrl = "https://d297-2401-4900-16eb-47d9-9827-3ebe-a273-8256.ngrok.io/"
+let remoteUrl = "https://891a-182-74-35-130.ngrok.io/"
 let mainMenuInputAction = getInputAction("main_menu_input")
 let mainMenuOptions = "To List new Stories, press 2. To List Story Categories, press 3.\
                       To Request a new Story, press 4. To Repeat Current Menu, press 8.\
@@ -480,7 +480,7 @@ app.post('/story_input',(req,res) => {
           userInfo[to]["currentStoryAudioFileName"] = "source.mp3"
           startStream(to);
           res.json([
-            getTalkAction("Please wait for 2 to 3 minutes, your story is being downloaded",to,false),
+            getTalkAction("Please wait for 1 to 2 minutes, your story "+userInfo[to]["currentStory"]+" is being loaded",to,false),
             {
               "action":"stream",
               "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
@@ -583,7 +583,7 @@ app.post("/story_reading",(req,res) => {
         }
         setTimeout(() => {
           if(userInfo[to]["currentStory"]){
-            ncco.push(getTalkAction("To continue reading Current Story, press 1.",to));
+            ncco.push(getTalkAction("To continue reading "+userInfo[to]["currentStory"]+" Story, press 1.",to));
           }
           else{
             ncco.push(getTalkAction("To start reading a new Story, press 1.",to));
@@ -723,7 +723,7 @@ app.post("/request_story", (req,res) => {
       if(isStoryExist){
         startStream(to);
         res.json([
-          getTalkAction("Please wait for 2 to 3 minutes, your story is being loaded",to,false),
+          getTalkAction("Please wait for 1 to 2 minutes, your story "+userInfo[to]["currentStory"]+" is being loaded",to,false),
           {
             "action":"stream",
             "streamUrl": ["https://github.com/manikanta-MB/IVR-Audio-Recordings/blob/main/silence.mp3?raw=true"],
